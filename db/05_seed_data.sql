@@ -9,6 +9,9 @@
 -- host, replace /data_pipeline/seed_csvs with your local path.
 -- Regenerate the CSVs with:  python data_pipeline/generate_data.py
 -- Re-seed from scratch with:  docker compose down -v && docker compose up
+--
+-- Column lists follow db/01_schema.sql. The CSV header row is skipped, so the
+-- lists below map to the CSV columns by position.
 -- ============================================================================
 
 \set ON_ERROR_STOP on
@@ -16,29 +19,30 @@
 BEGIN;
 
 -- 1. Master user entities
-\copy "USER"(User_id, Name, Email, Password_hash, Role, Created_at) FROM '/data_pipeline/seed_csvs/users.csv' WITH (FORMAT csv, HEADER true);
+\copy "USER"(user_id, name, email, password_hash, role, created_at) FROM '/data_pipeline/seed_csvs/users.csv' WITH (FORMAT csv, HEADER true);
 
--- 2. User financial accounts
-\copy ACCOUNT(Account_id, User_id, Cash_balance, Is_house, Created_at) FROM '/data_pipeline/seed_csvs/accounts.csv' WITH (FORMAT csv, HEADER true);
+-- 2. User financial accounts (CSV: Account_id, User_id, Account_type, Cash_balance, Created_at)
+\copy ACCOUNT(account_id, user_id, account_type, cash_balance, created_at) FROM '/data_pipeline/seed_csvs/accounts.csv' WITH (FORMAT csv, HEADER true);
 
 -- 3. Master instrument registry
-\copy INSTRUMENT(Instrument_id, Symbol, Name, Instrument_type, Sector, Multiplier, Tick_size, Lot_size, Status) FROM '/data_pipeline/seed_csvs/instruments.csv' WITH (FORMAT csv, HEADER true);
+\copy INSTRUMENT(instrument_id, symbol, name, instrument_type, sector, multiplier, tick_size, lot_size, status) FROM '/data_pipeline/seed_csvs/instruments.csv' WITH (FORMAT csv, HEADER true);
 
 -- 4. EER 8A subclass tables
-\copy BOND(Instrument_id, Face_value, Coupon_rate, Coupon_frequency, Issue_date, Maturity_date) FROM '/data_pipeline/seed_csvs/bonds.csv' WITH (FORMAT csv, HEADER true);
-\copy OPTION(Instrument_id, Underlying_id, Strike, Expiry, Option_type) FROM '/data_pipeline/seed_csvs/options.csv' WITH (FORMAT csv, HEADER true);
+\copy BOND(instrument_id, face_value, coupon_rate, coupon_frequency, issue_date, maturity_date) FROM '/data_pipeline/seed_csvs/bonds.csv' WITH (FORMAT csv, HEADER true);
+\copy OPTION(instrument_id, underlying_id, strike, expiry, option_type) FROM '/data_pipeline/seed_csvs/options.csv' WITH (FORMAT csv, HEADER true);
 
 -- 5. Weak entity: historical market data (~1,250 rows: 3 stocks + 1 option + 1 bond)
-\copy PRICE_BAR(Instrument_id, Trade_date, Open, High, Low, Close, Volume) FROM '/data_pipeline/seed_csvs/price_bars.csv' WITH (FORMAT csv, HEADER true);
+--    The schema's PRICE_BAR date column is named "timestamp" (the report says Trade_date).
+\copy PRICE_BAR(instrument_id, "timestamp", open, high, low, close, volume) FROM '/data_pipeline/seed_csvs/price_bars.csv' WITH (FORMAT csv, HEADER true);
 
--- 6. House inventory (enable once the POSITION table exists in 01_schema.sql)
--- \copy POSITION(Account_id, Instrument_id, Qty, Avg_cost) FROM '/data_pipeline/seed_csvs/positions.csv' WITH (FORMAT csv, HEADER true);
+-- 6. House inventory (CSV: Account_id, Instrument_id, Qty, Avg_cost); position_id is auto-generated
+\copy POSITION(account_id, instrument_id, quantity, average_buy_price) FROM '/data_pipeline/seed_csvs/positions.csv' WITH (FORMAT csv, HEADER true);
 
 -- 7. Advance SERIAL sequences past the explicit IDs loaded above, otherwise the
 --    next app-created row collides with ID 1 (duplicate key).
-SELECT setval(pg_get_serial_sequence('"USER"', 'user_id'),          (SELECT MAX(user_id) FROM "USER"));
-SELECT setval(pg_get_serial_sequence('account', 'account_id'),      (SELECT MAX(account_id) FROM account));
-SELECT setval(pg_get_serial_sequence('instrument', 'instrument_id'),(SELECT MAX(instrument_id) FROM instrument));
+SELECT setval(pg_get_serial_sequence('"USER"', 'user_id'),           (SELECT MAX(user_id) FROM "USER"));
+SELECT setval(pg_get_serial_sequence('account', 'account_id'),       (SELECT MAX(account_id) FROM account));
+SELECT setval(pg_get_serial_sequence('instrument', 'instrument_id'), (SELECT MAX(instrument_id) FROM instrument));
 
 COMMIT;
 
@@ -53,4 +57,6 @@ SELECT 'BOND', COUNT(*) FROM BOND
 UNION ALL
 SELECT 'OPTION', COUNT(*) FROM OPTION
 UNION ALL
-SELECT 'PRICE_BAR', COUNT(*) FROM PRICE_BAR;
+SELECT 'PRICE_BAR', COUNT(*) FROM PRICE_BAR
+UNION ALL
+SELECT 'POSITION', COUNT(*) FROM POSITION;

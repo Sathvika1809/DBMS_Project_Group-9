@@ -184,13 +184,14 @@ users = [
     (6, "Hakimkari Sathvika", "sathvika@exchange.com", "hash_sat_123", "TRADER", "2026-01-02 00:00:00"),
 ]
 
+# Account_type matches db/01_schema.sql: CHECK IN ('HOUSE', 'RETAIL', 'INSTITUTIONAL')
 accounts = [
-    (101, 1, 10000000.00, True, "2026-01-01 00:00:00"),   # House account (inventory pool)
-    (102, 2, 500000.00, False, "2026-01-02 00:00:00"),
-    (103, 3, 500000.00, False, "2026-01-02 00:00:00"),
-    (104, 4, 500000.00, False, "2026-01-02 00:00:00"),
-    (105, 5, 500000.00, False, "2026-01-02 00:00:00"),
-    (106, 6, 500000.00, False, "2026-01-02 00:00:00"),
+    (101, 1, "HOUSE", 10000000.00, "2026-01-01 00:00:00"),   # House account (inventory pool)
+    (102, 2, "RETAIL", 500000.00, "2026-01-02 00:00:00"),
+    (103, 3, "RETAIL", 500000.00, "2026-01-02 00:00:00"),
+    (104, 4, "RETAIL", 500000.00, "2026-01-02 00:00:00"),
+    (105, 5, "RETAIL", 500000.00, "2026-01-02 00:00:00"),
+    (106, 6, "RETAIL", 500000.00, "2026-01-02 00:00:00"),
 ]
 
 OPTION_SYMBOL = f"REL_CALL_{STRIKE}"
@@ -294,7 +295,7 @@ def write_csv(filename, headers, rows):
 
 
 write_csv("users.csv", ["User_id", "Name", "Email", "Password_hash", "Role", "Created_at"], users)
-write_csv("accounts.csv", ["Account_id", "User_id", "Cash_balance", "Is_house", "Created_at"], accounts)
+write_csv("accounts.csv", ["Account_id", "User_id", "Account_type", "Cash_balance", "Created_at"], accounts)
 write_csv("instruments.csv", ["Instrument_id", "Symbol", "Name", "Instrument_type", "Sector",
                               "Multiplier", "Tick_size", "Lot_size", "Status"], instruments)
 write_csv("bonds.csv", ["Instrument_id", "Face_value", "Coupon_rate", "Coupon_frequency",

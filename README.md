@@ -1,4 +1,4 @@
-# CS F212 Database Systems — Project Mid-Semester Submission
+# CS F212 Database Systems — Project Submission
 ## Group 9: Paper-Trading Exchange
 **Institution:** BITS Pilani, Hyderabad Campus  
 **Course:** CS F212 Database Systems  
@@ -56,11 +56,11 @@ All seed data is produced by `data_pipeline/generate_data.py`:
 
 | File | Content |
 |---|---|
-| `users.csv`, `accounts.csv` | 1 admin/house user + 5 traders; house account holds the inventory pool |
+| `users.csv`, `accounts.csv` | 1 admin/house user + 5 traders; account 101 has `Account_type = 'HOUSE'` and holds the inventory pool, the others are `'RETAIL'` |
 | `instruments.csv` | 3 NSE stocks (RELIANCE, TCS, INFY), 1 GOI bond, 1 RELIANCE call option |
 | `bonds.csv`, `options.csv` | EER subclass rows (option strike = next multiple of 50 above RELIANCE's latest close) |
 | `price_bars.csv` | 1 year of daily OHLCV: real NSE bars for stocks, Black-Scholes bars for the option (rolling 30-day historical volatility, 7% risk-free rate), yield-curve bars for the bond (mean-reverting YTM discounted over the coupon schedule) |
-| `positions.csv` | House-account starting inventory, for the `POSITION` table |
+| `positions.csv` | House-account starting inventory for the `POSITION` table (loaded by `05_seed_data.sql`) |
 
 **Regenerate the CSVs** (needs internet for `yfinance`):
 
@@ -90,7 +90,7 @@ python backend/tests/stress_test_concurrency.py
 
 ## 6. Current Implementation Status
 * **Design (report):** 12 normalized relations in BCNF with 16 foreign keys; attribute-defined, disjoint, partial specialization of `INSTRUMENT` into `BOND` and `OPTION`; weak entities `PRICE_BAR` (owner `INSTRUMENT`) and `ORDER_FILL` (owner `ORDER`).
-* **Implemented in `db/01_schema.sql` so far:** `USER`, `ACCOUNT`, `INSTRUMENT`, `BOND`, `OPTION`, `PRICE_BAR`, `ORDER`. Still to add: `TRADE`, `ORDER_FILL`, `POSITION`, `CASH_LEDGER`, `AUDIT_LOG`.
-* **Data pipeline:** complete for the implemented tables; `positions.csv` is generated and its `\copy` is ready to enable in `05_seed_data.sql` once `POSITION` exists.
+* **Implemented in `db/01_schema.sql` so far:** `USER`, `ACCOUNT`, `INSTRUMENT`, `BOND`, `OPTION`, `PRICE_BAR`, `POSITION`, `ORDER` (8 of 12). Still to add: `TRADE`, `ORDER_FILL`, `CASH_LEDGER`, `AUDIT_LOG`.
+* **Data pipeline:** complete for all implemented tables (`USER`, `ACCOUNT`, `INSTRUMENT`, `BOND`, `OPTION`, `PRICE_BAR`, `POSITION`); verified by loading the CSVs into PostgreSQL 16 against the current `01_schema.sql`.
 * **Backend:** order placement and portfolio endpoints are written; they depend on the `match_and_settle` procedure and `portfolio_view`, which are not implemented yet (`db/02`–`04` are empty).
 * **Planned Features:** Stored procedures for order matching, triggers for audit logging and domain constraints, and partial indexes for open limit orders.

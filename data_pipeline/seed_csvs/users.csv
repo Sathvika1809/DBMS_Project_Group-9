@@ -1,0 +1,7 @@
+User_id,Name,Email,Password_hash,Role,Created_at
+1,House Admin,admin@exchange.com,hash_admin_123,ADMIN,2026-01-01 00:00:00
+2,Devansh Rupesh Anadkat,devansh@exchange.com,hash_dev_123,TRADER,2026-01-02 00:00:00
+3,Akarsh Ramadugu,akarsh@exchange.com,hash_ak_123,TRADER,2026-01-02 00:00:00
+4,Shashank Bodala,shashank@exchange.com,hash_sh_123,TRADER,2026-01-02 00:00:00
+5,Druhin Sourya Datta,druhin@exchange.com,hash_dr_123,TRADER,2026-01-02 00:00:00
+6,Hakimkari Sathvika,sathvika@exchange.com,hash_sat_123,TRADER,2026-01-02 00:00:00

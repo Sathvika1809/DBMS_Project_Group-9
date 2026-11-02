@@ -1,0 +1,6 @@
+Instrument_id,Symbol,Name,Instrument_type,Sector,Multiplier,Tick_size,Lot_size,Status
+1,RELIANCE,Reliance Industries Ltd,STOCK,Energy,1.0,0.05,1,ACTIVE
+2,TCS,Tata Consultancy Services,STOCK,Technology,1.0,0.05,1,ACTIVE
+3,INFY,Infosys Limited,STOCK,Technology,1.0,0.05,1,ACTIVE
+4,GOI754_2032,7.54% GOI Sovereign Bond 2032,BOND,Government,10.0,0.01,100,ACTIVE
+5,REL_CALL_2500,RELIANCE Nov 2500 Call,OPTION,Derivatives,250.0,0.05,250,ACTIVE

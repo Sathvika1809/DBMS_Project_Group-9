@@ -1,169 +1,172 @@
-# Primary script: Fetches real NSE stocks + computes Black-Scholes options & bonds
-
-import csv
-import math
 import os
 import random
-from datetime import datetime
+import numpy as np
+import pandas as pd
 import yfinance as yf
+from scipy.stats import norm
 
-# Fixed seed for any auxiliary noise for strict reproducibility
+# Set fixed seeds for full reproducibility
 random.seed(42)
+np.random.seed(42)
 
-# ============================================================================
-# 1. QUANT MATHEMATICAL MODEL (Black-Scholes for European Options)
-# ============================================================================
+OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def norm_cdf(x):
-    """Cumulative distribution function for standard normal distribution."""
-    return (1.0 + math.erf(x / math.sqrt(2.0))) / 2.0
-
-def black_scholes(S, K, T, r, sigma, option_type="CALL"):
-    """
-    Black-Scholes European Option Pricing Model.
-    S: Current Underlying Stock Price (Real NSE Close)
-    K: Strike Price (2500.0)
-    T: Time to Expiry in Years
-    r: Risk-free Interest Rate (7.0% -> 0.07)
-    sigma: Historical Volatility (22.0% -> 0.22)
-    """
-    if T <= 0:
-        return max(0.0, S - K) if option_type == "CALL" else max(0.0, K - S)
+def calculate_black_scholes(S, K, T, r, sigma, option_type='call'):
+    """Calculate Black-Scholes option price."""
+    if T <= 0 or sigma <= 0:
+        return max(0.0, S - K) if option_type == 'call' else max(0.0, K - S)
     
-    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
-    d2 = d1 - sigma * math.sqrt(T)
+    d1 = (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
     
-    if option_type == "CALL":
-        price = S * norm_cdf(d1) - K * math.exp(-r * T) * norm_cdf(d2)
+    if option_type == 'call':
+        price = S * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
     else:
-        price = K * math.exp(-r * T) * norm_cdf(-d2) + S * norm_cdf(-d1)
+        price = K * np.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+        
+    return max(0.05, round(float(price), 2))
+
+def calculate_bond_price(face_value, coupon_rate, ytm, years_to_maturity, freq=2):
+    """Calculate bond clean price via discounted cash flow matching yield curve."""
+    periods = int(years_to_maturity * freq)
+    if periods == 0:
+        return round(face_value, 2)
     
-    return max(0.05, round(price, 2))  # Minimum tick price threshold
-
-# ============================================================================
-# 2. MASTER ENTITY DATA DEFINITIONS (Group 9 Schema)
-# ============================================================================
-
-users = [
-    (1, "House Admin", "admin@exchange.com", "hash_admin_123", "ADMIN", "2026-01-01 00:00:00"),
-    (2, "Devansh Rupesh Anadkat", "devansh@exchange.com", "hash_dev_123", "TRADER", "2026-01-02 00:00:00"),
-    (3, "Akarsh Ramadugu", "akarsh@exchange.com", "hash_ak_123", "TRADER", "2026-01-02 00:00:00"),
-    (4, "Shashank Bodala", "shashank@exchange.com", "hash_sh_123", "TRADER", "2026-01-02 00:00:00"),
-    (5, "Druhin Sourya Datta", "druhin@exchange.com", "hash_dr_123", "TRADER", "2026-01-02 00:00:00"),
-    (6, "Hakimkari Sathvika", "sathvika@exchange.com", "hash_sat_123", "TRADER", "2026-01-02 00:00:00")
-]
-
-accounts = [
-    (101, 1, 10000000.00, True, "2026-01-01 00:00:00"),   # House Account (Inventory pool)
-    (102, 2, 500000.00, False, "2026-01-02 00:00:00"),
-    (103, 3, 500000.00, False, "2026-01-02 00:00:00"),
-    (104, 4, 500000.00, False, "2026-01-02 00:00:00"),
-    (105, 5, 500000.00, False, "2026-01-02 00:00:00"),
-    (106, 6, 500000.00, False, "2026-01-02 00:00:00")
-]
-
-instruments = [
-    (1, "RELIANCE", "Reliance Industries Ltd", "STOCK", "Energy", 1.0, 0.05, 1, "ACTIVE"),
-    (2, "TCS", "Tata Consultancy Services", "STOCK", "Technology", 1.0, 0.05, 1, "ACTIVE"),
-    (3, "INFY", "Infosys Limited", "STOCK", "Technology", 1.0, 0.05, 1, "ACTIVE"),
-    (4, "GOI754_2032", "7.54% GOI Sovereign Bond 2032", "BOND", "Government", 10.0, 0.01, 100, "ACTIVE"),
-    (5, "REL_CALL_2500", "RELIANCE Nov 2500 Call", "OPTION", "Derivatives", 250.0, 0.05, 250, "ACTIVE")
-]
-
-bonds = [
-    (4, 1000.00, 7.54, 2, "2022-04-15", "2032-04-15")
-]
-
-options = [
-    (5, 1, 2500.00, "2026-11-26", "CALL")  # Foreign key Underlying_id points to RELIANCE (ID: 1)
-]
-
-# ============================================================================
-# 3. REAL MARKET DATA FETCHING & DERIVATIVE PRICING
-# ============================================================================
-
-stock_tickers = {
-    1: "RELIANCE.NS",
-    2: "TCS.NS",
-    3: "INFY.NS"
-}
-
-price_bars = []
-reliance_dates_and_closes = []
-
-print("Fetching 1 year of real historical stock market data from NSE...")
-
-for inst_id, symbol in stock_tickers.items():
-    ticker = yf.Ticker(symbol)
-    df = ticker.history(period="1y", interval="1d")
+    coupon = (coupon_rate * face_value) / freq
+    discount_rate = ytm / freq
     
-    for date, row in df.iterrows():
-        trade_date = date.strftime("%Y-%m-%d")
+    t = np.arange(1, periods + 1)
+    pv_coupons = np.sum(coupon / (1 + discount_rate)**t)
+    pv_face = face_value / (1 + discount_rate)**periods
+    return round(float(pv_coupons + pv_face), 2)
+
+def main():
+    print("Fetching historical RELIANCE data via yfinance...")
+    stock_df = yf.download("RELIANCE.NS", period="1y", interval="1d")
+    
+    if stock_df.empty:
+        raise ValueError("Failed to fetch yfinance data for RELIANCE.NS")
+        
+    # Flatten MultiIndex columns if present
+    if isinstance(stock_df.columns, pd.MultiIndex):
+        stock_df.columns = stock_df.columns.get_level_values(0)
+        
+    stock_df = stock_df.dropna().reset_index()
+
+    # Calculate 30-day annualized rolling volatility
+    log_returns = np.log(stock_df['Close'] / stock_df['Close'].shift(1))
+    historical_sigma = float(log_returns.std() * np.sqrt(252))
+    print(f"Calculated Historical Volatility: {historical_sigma:.4f}")
+
+    # Generate Price Bars for RELIANCE (Instrument ID 1)
+    price_bars = []
+    for idx, row in stock_df.iterrows():
+        dt_str = row['Date'].strftime('%Y-%m-%d %H:%M:%S')
         open_p = round(float(row['Open']), 2)
         high_p = round(float(row['High']), 2)
         low_p = round(float(row['Low']), 2)
         close_p = round(float(row['Close']), 2)
-        volume = int(row['Volume'])
+        vol = int(row['Volume'])
         
-        price_bars.append((inst_id, trade_date, open_p, high_p, low_p, close_p, volume))
+        price_bars.append({
+            "instrument_id": 1,
+            "timestamp": dt_str,
+            "open": open_p,
+            "high": high_p,
+            "low": low_p,
+            "close": close_p,
+            "volume": vol
+        })
+
+    latest_spot = price_bars[-1]["close"]
+    # Set strike near current spot price (round up to nearest 50)
+    strike_price = float(np.ceil(latest_spot * 1.02 / 50.0) * 50.0)
+    print(f"Latest Spot Price: {latest_spot}, Selected Option Strike: {strike_price}")
+
+    risk_free_rate = 0.065
+    total_days = len(price_bars)
+
+    # Generate Option (ID 5) & Bond (ID 2) Bars aligned with stock timestamps
+    for i, bar in enumerate(price_bars):
+        spot = bar["close"]
+        days_left = max(1, total_days - i)
+        T = days_left / 365.0
         
-        if inst_id == 1:
-            reliance_dates_and_closes.append((trade_date, close_p))
+        # 1. Option Pricing
+        bs_close = calculate_black_scholes(spot, strike_price, T, risk_free_rate, historical_sigma, 'call')
+        bs_open = round(max(0.05, bs_close * np.random.uniform(0.98, 1.02)), 2)
+        bs_high = round(max(bs_open, bs_close) * np.random.uniform(1.00, 1.03), 2)
+        bs_low = round(max(0.05, min(bs_open, bs_close) * np.random.uniform(0.97, 1.00)), 2)
+        
+        price_bars.append({
+            "instrument_id": 5,
+            "timestamp": bar["timestamp"],
+            "open": bs_open,
+            "high": bs_high,
+            "low": bs_low,
+            "close": bs_close,
+            "volume": random.randint(100, 5000)
+        })
 
-print(f"Loaded real stock bars. Processing derivatives and bond pricing...")
+        # 2. Bond Pricing (DCF with small YTM random walk)
+        ytm = 0.071 + np.random.normal(0, 0.0005)
+        bond_close = calculate_bond_price(100.0, 0.0754, ytm, years_to_maturity=5.0)
+        
+        price_bars.append({
+            "instrument_id": 2,
+            "timestamp": bar["timestamp"],
+            "open": round(bond_close + np.random.uniform(-0.05, 0.05), 2),
+            "high": round(bond_close + np.random.uniform(0.01, 0.10), 2),
+            "low": round(bond_close - np.random.uniform(0.01, 0.10), 2),
+            "close": bond_close,
+            "volume": random.randint(500, 10000)
+        })
 
-# 4. Generate OPTION price bars based on real RELIANCE stock prices via Black-Scholes
-expiry_dt = datetime(2026, 11, 26)
+    # Save Price Bars CSV
+    pd.DataFrame(price_bars).to_csv(os.path.join(OUTPUT_DIR, "price_bars.csv"), index=False)
 
-for trade_date_str, rel_close in reliance_dates_and_closes:
-    current_dt = datetime.strptime(trade_date_str, "%Y-%m-%d")
-    time_to_expiry_years = max(0.001, (expiry_dt - current_dt).days / 365.0)
-    
-    # Calculate exact Black-Scholes theoretical value
-    bs_close = black_scholes(S=rel_close, K=2500.0, T=time_to_expiry_years, r=0.07, sigma=0.22, option_type="CALL")
-    
-    open_p = bs_close
-    close_p = bs_close
-    high_p = round(close_p * 1.015, 2)
-    low_p = round(max(0.05, close_p * 0.985), 2)
-    volume = random.randint(5000, 40000)
-    
-    price_bars.append((5, trade_date_str, open_p, high_p, low_p, close_p, volume))
+    # Save Options metadata CSV
+    options_data = [{
+        "option_id": 1,
+        "instrument_id": 5,
+        "underlying_instrument_id": 1,
+        "option_type": "CALL",
+        "strike_price": strike_price,
+        "expiration_date": "2026-12-31"
+    }]
+    pd.DataFrame(options_data).to_csv(os.path.join(OUTPUT_DIR, "options.csv"), index=False)
 
-# 5. Generate BOND price bars aligned with the trading calendar
-bond_price = 99.50
-for trade_date_str, _ in reliance_dates_and_closes:
-    change = random.uniform(-0.10, 0.10)
-    close_p = round(bond_price + change, 2)
-    open_p = round(bond_price, 2)
-    high_p = round(max(open_p, close_p) + 0.05, 2)
-    low_p = round(min(open_p, close_p) - 0.05, 2)
-    volume = random.randint(500, 5000)
-    
-    price_bars.append((4, trade_date_str, open_p, high_p, low_p, close_p, volume))
-    bond_price = close_p
+    # Save Instruments CSV
+    instruments_data = [
+        {"instrument_id": 1, "ticker": "RELIANCE", "name": "Reliance Industries Ltd", "instrument_type": "STOCK", "coupon_rate": None, "coupon_frequency": None, "maturity_date": None},
+        {"instrument_id": 2, "ticker": "GS2031", "name": "7.54% GOI 2031", "instrument_type": "BOND", "coupon_rate": 0.0754, "coupon_frequency": 2, "maturity_date": "2031-05-23"},
+        {"instrument_id": 5, "ticker": f"RELIANCE26DEC{int(strike_price)}CE", "name": f"RELIANCE Call {int(strike_price)}", "instrument_type": "OPTION", "coupon_rate": None, "coupon_frequency": None, "maturity_date": "2026-12-31"}
+    ]
+    pd.DataFrame(instruments_data).to_csv(os.path.join(OUTPUT_DIR, "instruments.csv"), index=False)
 
-# ============================================================================
-# 4. CSV OUTPUT GENERATION WITH AUTOMATIC FOLDER RESOLUTION
-# ============================================================================
+    # Save Users CSV
+    users_data = [
+        {"user_id": 1, "username": "house_desk", "email": "house@exchange.com"},
+        {"user_id": 2, "username": "trader_joe", "email": "joe@trader.com"}
+    ]
+    pd.DataFrame(users_data).to_csv(os.path.join(OUTPUT_DIR, "users.csv"), index=False)
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-output_dir = os.path.join(script_dir, "seed_csvs")
-os.makedirs(output_dir, exist_ok=True)
+    # Save Accounts CSV
+    accounts_data = [
+        {"account_id": 1, "user_id": 1, "account_type": "HOUSE", "balance": 100000000.00},
+        {"account_id": 2, "user_id": 2, "account_type": "RETAIL", "balance": 500000.00}
+    ]
+    pd.DataFrame(accounts_data).to_csv(os.path.join(OUTPUT_DIR, "accounts.csv"), index=False)
 
-def write_csv(filename, headers, rows):
-    filepath = os.path.join(output_dir, filename)
-    with open(filepath, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        writer.writerow(headers)
-        writer.writerows(rows)
-    print(f"Generated '{filepath}' successfully ({len(rows)} records).")
+    # Save Positions CSV (House Account Inventory)
+    positions_data = [
+        {"position_id": 1, "account_id": 1, "instrument_id": 1, "quantity": 10000, "average_buy_price": latest_spot},
+        {"position_id": 2, "account_id": 1, "instrument_id": 2, "quantity": 50000, "average_buy_price": 100.00},
+        {"position_id": 3, "account_id": 1, "instrument_id": 5, "quantity": 100000, "average_buy_price": 45.00}
+    ]
+    pd.DataFrame(positions_data).to_csv(os.path.join(OUTPUT_DIR, "positions.csv"), index=False)
 
-write_csv("users.csv", ["User_id", "Name", "Email", "Password_hash", "Role", "Created_at"], users)
-write_csv("accounts.csv", ["Account_id", "User_id", "Cash_balance", "Is_house", "Created_at"], accounts)
-write_csv("instruments.csv", ["Instrument_id", "Symbol", "Name", "Instrument_type", "Sector", "Multiplier", "Tick_size", "Lot_size", "Status"], instruments)
-write_csv("bonds.csv", ["Instrument_id", "Face_value", "Coupon_rate", "Coupon_frequency", "Issue_date", "Maturity_date"], bonds)
-write_csv("options.csv", ["Instrument_id", "Underlying_id", "Strike", "Expiry", "Option_type"], options)
-write_csv("price_bars.csv", ["Instrument_id", "Trade_date", "Open", "High", "Low", "Close", "Volume"], price_bars)
+    print("Successfully generated all pipeline CSV files in data_pipeline/")
 
-print(f"\nPipeline execution complete! All CSV files are saved in '{output_dir}'.")
+if __name__ == "__main__":
+    main()

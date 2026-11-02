@@ -1,9 +1,11 @@
 -- ============================================================================
--- CS F212 Database Systems — Project Schema Definition (Minimal Core)
+-- CS F212 Database Systems — Project Schema Definition
 -- File: db/01_schema.sql
 -- ============================================================================
 
+DROP TABLE IF EXISTS "ORDER" CASCADE;
 DROP TABLE IF EXISTS PRICE_BAR CASCADE;
+DROP TABLE IF EXISTS POSITION CASCADE;
 DROP TABLE IF EXISTS OPTION CASCADE;
 DROP TABLE IF EXISTS BOND CASCADE;
 DROP TABLE IF EXISTS INSTRUMENT CASCADE;
@@ -12,77 +14,86 @@ DROP TABLE IF EXISTS "USER" CASCADE;
 
 -- 1. Master User Entity
 CREATE TABLE "USER" (
-    User_id SERIAL PRIMARY KEY,
-    Name VARCHAR(100) NOT NULL,
-    Email VARCHAR(150) UNIQUE NOT NULL,
-    Password_hash VARCHAR(255) NOT NULL,
-    Role VARCHAR(20) CHECK (Role IN ('TRADER', 'ADMIN', 'HOUSE')),
-    Created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    user_id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    email VARCHAR(150) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(20) DEFAULT 'TRADER' CHECK (role IN ('TRADER', 'ADMIN', 'HOUSE')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 2. User Financial Account Entity
 CREATE TABLE ACCOUNT (
-    Account_id SERIAL PRIMARY KEY,
-    User_id INT REFERENCES "USER"(User_id) ON DELETE CASCADE,
-    Cash_balance DECIMAL(15, 2) NOT NULL DEFAULT 100000.00,
-    Is_house BOOLEAN DEFAULT FALSE,
-    Created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    account_id SERIAL PRIMARY KEY,
+    user_id INT REFERENCES "USER"(user_id) ON DELETE CASCADE,
+    account_type VARCHAR(20) NOT NULL CHECK (account_type IN ('HOUSE', 'RETAIL', 'INSTITUTIONAL')),
+    cash_balance DECIMAL(15, 2) NOT NULL DEFAULT 100000.00,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 3. Master Instrument Registry
 CREATE TABLE INSTRUMENT (
-    Instrument_id SERIAL PRIMARY KEY,
-    Symbol VARCHAR(20) UNIQUE NOT NULL,
-    Name VARCHAR(100) NOT NULL,
-    Instrument_type VARCHAR(20) CHECK (Instrument_type IN ('STOCK', 'EQUITY', 'BOND', 'OPTION')),
-    Sector VARCHAR(50),
-    Multiplier DECIMAL(10, 2) DEFAULT 1.0,
-    Tick_size DECIMAL(10, 4) DEFAULT 0.05,
-    Lot_size INT DEFAULT 1,
-    Status VARCHAR(20) DEFAULT 'ACTIVE'
+    instrument_id SERIAL PRIMARY KEY,
+    symbol VARCHAR(30) UNIQUE NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    instrument_type VARCHAR(20) NOT NULL CHECK (instrument_type IN ('STOCK', 'BOND', 'OPTION')),
+    sector VARCHAR(50),
+    multiplier DECIMAL(10, 2) DEFAULT 1.0,
+    tick_size DECIMAL(10, 4) DEFAULT 0.05,
+    lot_size INT DEFAULT 1,
+    status VARCHAR(20) DEFAULT 'ACTIVE'
 );
 
 -- 4. EER Subclass: Bond
 CREATE TABLE BOND (
-    Instrument_id INT PRIMARY KEY REFERENCES INSTRUMENT(Instrument_id) ON DELETE CASCADE,
-    Face_value DECIMAL(12, 2) NOT NULL,
-    Coupon_rate DECIMAL(5, 4) NOT NULL,
-    Coupon_frequency VARCHAR(20) DEFAULT 'ANNUAL',
-    Issue_date DATE NOT NULL,
-    Maturity_date DATE NOT NULL
+    instrument_id INT PRIMARY KEY REFERENCES INSTRUMENT(instrument_id) ON DELETE CASCADE,
+    face_value DECIMAL(12, 2) NOT NULL,
+    coupon_rate DECIMAL(7, 4) NOT NULL, -- Allows up to 999.9999 (e.g., 0.0754)
+    coupon_frequency INT CHECK (coupon_frequency IN (1, 2, 4, 12)), -- Integer values per report spec
+    issue_date DATE NOT NULL,
+    maturity_date DATE NOT NULL
 );
 
 -- 5. EER Subclass: Option
 CREATE TABLE OPTION (
-    Instrument_id INT PRIMARY KEY REFERENCES INSTRUMENT(Instrument_id) ON DELETE CASCADE,
-    Underlying_id INT REFERENCES INSTRUMENT(Instrument_id),
-    Strike DECIMAL(12, 2) NOT NULL,
-    Expiry DATE NOT NULL,
-    Option_type VARCHAR(4) CHECK (Option_type IN ('CALL', 'PUT'))
+    instrument_id INT PRIMARY KEY REFERENCES INSTRUMENT(instrument_id) ON DELETE CASCADE,
+    underlying_id INT REFERENCES INSTRUMENT(instrument_id),
+    strike DECIMAL(12, 2) NOT NULL,
+    expiry DATE NOT NULL,
+    option_type VARCHAR(4) CHECK (option_type IN ('CALL', 'PUT'))
 );
 
 -- 6. Weak Entity: Historical Price Bars
 CREATE TABLE PRICE_BAR (
-    Instrument_id INT REFERENCES INSTRUMENT(Instrument_id) ON DELETE CASCADE,
-    Trade_date DATE NOT NULL,
-    Open DECIMAL(12, 2) NOT NULL,
-    High DECIMAL(12, 2) NOT NULL,
-    Low DECIMAL(12, 2) NOT NULL,
-    Close DECIMAL(12, 2) NOT NULL,
-    Volume BIGINT NOT NULL,
-    PRIMARY KEY (Instrument_id, Trade_date)
+    instrument_id INT REFERENCES INSTRUMENT(instrument_id) ON DELETE CASCADE,
+    timestamp TIMESTAMP NOT NULL,
+    open DECIMAL(12, 2) NOT NULL,
+    high DECIMAL(12, 2) NOT NULL,
+    low DECIMAL(12, 2) NOT NULL,
+    close DECIMAL(12, 2) NOT NULL,
+    volume BIGINT NOT NULL,
+    PRIMARY KEY (instrument_id, timestamp)
 );
--- 7. Active & Historical Order Registry
-DROP TABLE IF EXISTS "ORDER" CASCADE;
 
+-- 7. Account Holdings & Inventory Entity
+CREATE TABLE POSITION (
+    position_id SERIAL PRIMARY KEY,
+    account_id INT NOT NULL REFERENCES ACCOUNT(account_id) ON DELETE CASCADE,
+    instrument_id INT NOT NULL REFERENCES INSTRUMENT(instrument_id) ON DELETE CASCADE,
+    quantity DECIMAL(15, 4) NOT NULL,
+    average_buy_price DECIMAL(12, 2) NOT NULL,
+    CONSTRAINT unique_account_instrument UNIQUE (account_id, instrument_id)
+);
+
+-- 8. Active & Historical Order Registry
 CREATE TABLE "ORDER" (
-    Order_id SERIAL PRIMARY KEY,
-    Account_id INT REFERENCES ACCOUNT(Account_id) ON DELETE CASCADE,
-    Instrument_id INT REFERENCES INSTRUMENT(Instrument_id) ON DELETE CASCADE,
-    Side VARCHAR(4) CHECK (Side IN ('BUY', 'SELL')),
-    Price DECIMAL(12, 2) NOT NULL,
-    Qty DECIMAL(12, 4) NOT NULL,
-    Filled_qty DECIMAL(12, 4) DEFAULT 0.0,
-    Status VARCHAR(20) DEFAULT 'OPEN',
-    Created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    order_id SERIAL PRIMARY KEY,
+    account_id INT REFERENCES ACCOUNT(account_id) ON DELETE CASCADE,
+    instrument_id INT REFERENCES INSTRUMENT(instrument_id) ON DELETE CASCADE,
+    side VARCHAR(4) CHECK (side IN ('BUY', 'SELL')),
+    price DECIMAL(12, 2) NOT NULL,
+    qty DECIMAL(12, 4) NOT NULL,
+    filled_qty DECIMAL(12, 4) DEFAULT 0.0,
+    status VARCHAR(20) DEFAULT 'OPEN',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

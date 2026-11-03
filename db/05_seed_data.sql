@@ -16,6 +16,13 @@
 
 \set ON_ERROR_STOP on
 
+-- Seed rows must not fire the audit trigger (03_triggers.sql), otherwise
+-- AUDIT_LOG fills with one INSERT row per seeded record. 'replica' skips
+-- user triggers (and FK checks, which is fine: the load order below is FK-safe
+-- and the verification counts at the end confirm every table loaded).
+-- Needs superuser, which the docker 'postgres' user is.
+SET session_replication_role = replica;
+
 BEGIN;
 
 -- 1. Master user entities
@@ -45,6 +52,9 @@ SELECT setval(pg_get_serial_sequence('account', 'account_id'),       (SELECT MAX
 SELECT setval(pg_get_serial_sequence('instrument', 'instrument_id'), (SELECT MAX(instrument_id) FROM instrument));
 
 COMMIT;
+
+-- Back to normal behaviour for everything after the seed.
+SET session_replication_role = DEFAULT;
 
 -- Ingestion verification summary
 SELECT 'USER' AS Relation, COUNT(*) AS Total_Rows FROM "USER"

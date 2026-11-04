@@ -40,7 +40,7 @@ BEGIN;
 
 -- 5. Weak entity: historical market data (~1,240 rows: 3 stocks + 1 option + 1 bond, 248 trading days each)
 --    The schema's PRICE_BAR date column is named "timestamp" (the report says Trade_date).
-\copy PRICE_BAR(instrument_id, "timestamp", open, high, low, close, volume) FROM '/data_pipeline/seed_csvs/price_bars.csv' WITH (FORMAT csv, HEADER true);
+\copy PRICE_BAR(instrument_id,trade_date, open, high, low, close, volume) FROM '/data_pipeline/seed_csvs/price_bars.csv' WITH (FORMAT csv, HEADER true);
 
 -- 6. House inventory (CSV: Account_id, Instrument_id, Qty, Avg_cost); position_id is auto-generated
 \copy POSITION(account_id, instrument_id, quantity, average_buy_price) FROM '/data_pipeline/seed_csvs/positions.csv' WITH (FORMAT csv, HEADER true);

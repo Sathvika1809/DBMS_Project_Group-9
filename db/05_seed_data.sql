@@ -38,7 +38,7 @@ BEGIN;
 \copy BOND(instrument_id, face_value, coupon_rate, coupon_frequency, issue_date, maturity_date) FROM '/data_pipeline/seed_csvs/bonds.csv' WITH (FORMAT csv, HEADER true);
 \copy OPTION(instrument_id, underlying_id, strike, expiry, option_type) FROM '/data_pipeline/seed_csvs/options.csv' WITH (FORMAT csv, HEADER true);
 
--- 5. Weak entity: historical market data (~1,250 rows: 3 stocks + 1 option + 1 bond)
+-- 5. Weak entity: historical market data (~1,240 rows: 3 stocks + 1 option + 1 bond, 248 trading days each)
 --    The schema's PRICE_BAR date column is named "timestamp" (the report says Trade_date).
 \copy PRICE_BAR(instrument_id, "timestamp", open, high, low, close, volume) FROM '/data_pipeline/seed_csvs/price_bars.csv' WITH (FORMAT csv, HEADER true);
 

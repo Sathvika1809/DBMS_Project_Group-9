@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres_db:
     image: postgres:16-alpine
@@ -12,21 +10,22 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      # Mount database DDL scripts to execute automatically on container startup
+      # Init scripts run once, in filename order, on first start of an empty volume
       - ./db/01_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
       - ./db/02_views_indexes.sql:/docker-entrypoint-initdb.d/02_views_indexes.sql
       - ./db/03_triggers.sql:/docker-entrypoint-initdb.d/03_triggers.sql
       - ./db/04_procedures.sql:/docker-entrypoint-initdb.d/04_procedures.sql
-      # Mount seed scripts and CSV data pipeline
       - ./db/05_seed_data.sql:/docker-entrypoint-initdb.d/05_seed_data.sql
-      - ./data_pipeline/seed_csvs:/data_pipeline/seed_csvs
+      - ./data_pipeline/seed_csvs:/data_pipeline/seed_csvs:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d papertrading"]
+      # -h localhost forces a TCP check. During first-time init Postgres runs a
+      # temporary server on the Unix socket only, so a socket check can pass
+      # before the seed has finished and the backend would start too early.
+      test: ["CMD-SHELL", "pg_isready -h localhost -U postgres -d papertrading"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
-  # Backend Service (FastAPI)
   backend:
     build: ./backend
     container_name: paper_trading_backend

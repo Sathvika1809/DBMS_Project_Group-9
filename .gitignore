@@ -1,24 +1,20 @@
-# Ignored folders
-previous version/
-previous version 
-Miscellaneous resources/
-Miscellaneous resources
-pre-correction final versions/
-pre-correction final versions
-
-# Python & Environment
+# Python
 __pycache__/
 *.pyc
-*.pyo
-*.pyd
 .venv/
-env/
 venv/
+env/
 
-# OS / IDE generated files
-.DS_Store
-Thumbs.db
+# Secrets / local config
+.env
+*.env
+
+# Editors and OS
 .vscode/
 .idea/
+.DS_Store
+Thumbs.db
 
-
+# Docker / DB local data
+pgdata/
+*.log

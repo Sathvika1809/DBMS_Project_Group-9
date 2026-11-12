@@ -25,6 +25,7 @@ export default function Trade() {
   const [search, setSearch] = useState("");
   const [rightTab, setRightTab] = useState<RightTab>("portfolio");
   const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [autoMarket, setAutoMarket] = useState(false);
 
   useEffect(() => {
     const saved = (localStorage.getItem("kite-theme") as "dark" | "light") || "dark";
@@ -72,6 +73,22 @@ export default function Trade() {
       setError(e.message);
     }
   }, [accountId, instId]);
+
+  const triggerMarketTick = useCallback(async () => {
+    try {
+      await api(`/simulate/tick${instId ? `?instrument_id=${instId}` : ""}`, { method: "POST" });
+      await refresh();
+    } catch {
+      // Ignore transient tick errors
+    }
+  }, [instId, refresh]);
+
+  useEffect(() => {
+    if (!autoMarket) return;
+    triggerMarketTick();
+    const timer = setInterval(triggerMarketTick, 4000);
+    return () => clearInterval(timer);
+  }, [autoMarket, triggerMarketTick]);
 
   useEffect(() => {
     if (instId != null) api(`/instruments/${instId}/bars`).then(setBars).catch(() => {});
@@ -137,6 +154,15 @@ export default function Trade() {
               ))}
             </select>
           </div>
+          <button
+            type="button"
+            className="theme-toggle"
+            style={autoMarket ? { borderColor: "var(--buy)", color: "var(--buy)" } : undefined}
+            onClick={() => setAutoMarket((v) => !v)}
+            title="Toggle automated market-maker liquidity bot"
+          >
+            {autoMarket ? "● Live Bot ON" : "○ Live Bot OFF"}
+          </button>
           <button
             type="button"
             className="theme-toggle"

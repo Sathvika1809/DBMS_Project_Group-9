@@ -5,7 +5,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import db_error_message, get_db_connection, pool
-from routers import analytics, market_data, orders, portfolio
+from routers import analytics, market_data, orders, portfolio,simulator
+
+from fastapi.middleware.cors import CORSMiddleware
 
 
 @asynccontextmanager
@@ -30,6 +32,7 @@ app.add_middleware(
 )
 
 app.include_router(orders.router)
+app.include_router(simulator.router)
 app.include_router(portfolio.router)
 app.include_router(market_data.router)
 app.include_router(analytics.router)

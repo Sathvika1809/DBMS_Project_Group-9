@@ -1,5 +1,7 @@
+const BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "/api").replace(/\/$/, "");
+
 export async function api(path: string, init?: RequestInit) {
-  const res = await fetch(`/api${path}`, {
+  const res = await fetch(`${BASE_URL}${path}`, {
     ...init,
     cache: "no-store",
     headers: { "Content-Type": "application/json" },

@@ -16,30 +16,29 @@ def _round_to_tick(price: Decimal, tick: Decimal) -> Decimal:
 
 @router.post("/tick")
 def simulate_market_tick(instrument_id: int | None = None):
-    """
-    Posts fresh two-sided market-maker quotes around the last price
-    and occasionally crosses the spread using match_and_settle.
-    """
     try:
         with get_db_connection() as conn:
-            # Prefer INSTITUTIONAL / MARKET_MAKER accounts, fallback to highest-cash accounts
+            # Prefer HOUSE / INSTITUTIONAL accounts (House Admin holds seeded inventory to sell)
             makers = conn.execute(
                 """
                 SELECT account_id FROM ACCOUNT
-                 ORDER BY CASE WHEN account_type IN ('INSTITUTIONAL', 'MARKET_MAKER') THEN 0 ELSE 1 END,
+                 ORDER BY CASE
+                            WHEN account_type = 'HOUSE' THEN 0
+                            WHEN account_type IN ('INSTITUTIONAL', 'MARKET_MAKER') THEN 1
+                            ELSE 2
+                          END,
                           account_id ASC
                  LIMIT 2
                 """
             ).fetchall()
 
             if len(makers) < 2:
-                raise HTTPException(status_code=400, detail="Need at least 2 seeded accounts to simulate liquidity.")
+                raise HTTPException(status_code=400, detail="Need at least 2 seeded accounts.")
 
-            maker_a = makers[0]["account_id"]
-            maker_b = makers[1]["account_id"]
-            maker_ids = (maker_a, maker_b)
+            house_acct = makers[0]["account_id"]   # Holds inventory -> posts SELL asks
+            second_acct = makers[1]["account_id"]  # Holds cash -> posts BUY bids
+            maker_ids = [house_acct, second_acct]
 
-            # Pick target instrument (or random active instrument)
             if instrument_id is not None:
                 instruments = conn.execute(
                     """
@@ -76,7 +75,7 @@ def simulate_market_tick(instrument_id: int | None = None):
             tick = Decimal(str(target["tick_size"]))
             mid = Decimal(str(target["ref_price"]))
 
-            # Cancel older open bot quotes on this instrument to keep the book clean
+            # Cancel old open bot orders so book stays fresh
             stale_orders = conn.execute(
                 """
                 SELECT order_id, account_id FROM "ORDER"
@@ -86,27 +85,31 @@ def simulate_market_tick(instrument_id: int | None = None):
                  ORDER BY order_id ASC
                  LIMIT 6
                 """,
-                (inst_id, list(maker_ids)),
+                (inst_id, maker_ids),
             ).fetchall()
 
             for stale in stale_orders:
-                conn.execute(
-                    "CALL cancel_order(%s::INT, %s::INT)",
-                    (stale["order_id"], stale["account_id"]),
-                )
+                try:
+                    with conn.transaction():
+                        conn.execute(
+                            "CALL cancel_order(%s::INT, %s::INT)",
+                            (stale["order_id"], stale["account_id"]),
+                        )
+                except psycopg.Error:
+                    pass
 
-            # Slight random drift (-1, 0, or +1 tick)
             drift_steps = random.choice([-1, 0, 0, 1])
             center = _round_to_tick(mid + tick * drift_steps, tick)
 
             placed = 0
-            # Post 2 bid levels (maker_a) and 2 ask levels (maker_b)
+            errors = []
             for level in (1, 2):
                 bid_px = _round_to_tick(center - tick * level, tick)
                 ask_px = _round_to_tick(center + tick * level, tick)
-                qty = Decimal(str(random.choice([2, 5, 10])))
+                qty = Decimal(str(random.choice([1, 2, 5])))
 
-                for acct, side, px in ((maker_a, "BUY", bid_px), (maker_b, "SELL", ask_px)):
+                # house_acct sells from inventory; second_acct buys with cash
+                for acct, side, px in ((second_acct, "BUY", bid_px), (house_acct, "SELL", ask_px)):
                     try:
                         with conn.transaction():
                             row = conn.execute(
@@ -118,15 +121,14 @@ def simulate_market_tick(instrument_id: int | None = None):
                             ).fetchone()
                             conn.execute("CALL match_and_settle(%s::INT)", (row["order_id"],))
                             placed += 1
-                    except psycopg.Error:
-                        # Skip individual quote if maker account lacks inventory/cash for that side
-                        pass
+                    except psycopg.Error as exc:
+                        errors.append(db_error_message(exc))
 
-            # 60% chance to execute a small crossing print so Time & Sales ticks live
+            # 70% chance to cross the spread so Time & Sales ticks live
             crossed = 0
-            if random.random() < 0.6:
+            if random.random() < 0.7:
                 cross_side = random.choice(["BUY", "SELL"])
-                taker_acct = maker_a if cross_side == "BUY" else maker_b
+                taker_acct = second_acct if cross_side == "BUY" else house_acct
                 cross_px = _round_to_tick(
                     center + (tick if cross_side == "BUY" else -tick),
                     tick,
@@ -142,14 +144,15 @@ def simulate_market_tick(instrument_id: int | None = None):
                         ).fetchone()
                         conn.execute("CALL match_and_settle(%s::INT)", (row["order_id"],))
                         crossed = 1
-                except psycopg.Error:
-                    pass
+                except psycopg.Error as exc:
+                    errors.append(db_error_message(exc))
 
             return {
                 "symbol": target["symbol"],
                 "center_price": str(center),
                 "quotes_posted": placed,
                 "trades_triggered": crossed,
+                "errors": errors[:2],
             }
     except HTTPException:
         raise

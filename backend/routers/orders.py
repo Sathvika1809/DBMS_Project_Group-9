@@ -22,16 +22,16 @@ class CancelRequest(BaseModel):
     account_id: int
 
 
+class ModifyRequest(BaseModel):
+    account_id: int
+    price: Decimal = Field(..., gt=0, max_digits=12, decimal_places=2)
+    qty: Decimal = Field(..., gt=0, max_digits=12, decimal_places=4)
+
+
 @router.post("/", status_code=status.HTTP_201_CREATED)
 @router.post("", status_code=status.HTTP_201_CREATED, include_in_schema=False)
 def place_and_match_order(order: OrderCreateRequest, unsafe: bool = False):
-    """
-    Insert a LIMIT order and call the match_and_settle stored procedure in ONE
-    transaction. If validation, matching or settlement fails, everything rolls
-    back, including the order itself.
-    ?unsafe=true calls match_and_settle_unsafe (no locks): concurrency demo only.
-    """
-    proc = "match_and_settle_unsafe" if unsafe else "match_and_settle"  # fixed whitelist
+    proc = "match_and_settle_unsafe" if unsafe else "match_and_settle"
     try:
         with get_db_connection() as conn:
             row = conn.execute(
@@ -74,6 +74,23 @@ def list_orders(account_id: int, limit: int = 50):
             """,
             (account_id, limit),
         ).fetchall()
+
+
+@router.post("/{order_id}/modify")
+def modify_order(order_id: int, body: ModifyRequest):
+    try:
+        with get_db_connection() as conn:
+            conn.execute(
+                "CALL modify_order(%s::INT, %s::INT, %s::NUMERIC, %s::NUMERIC)",
+                (order_id, body.account_id, body.price, body.qty),
+            )
+            result = conn.execute(
+                'SELECT status, filled_qty, price, qty FROM "ORDER" WHERE order_id = %s',
+                (order_id,),
+            ).fetchone()
+        return {"order_id": order_id, **result}
+    except psycopg.Error as e:
+        raise HTTPException(status_code=400, detail=db_error_message(e))
 
 
 @router.post("/{order_id}/cancel")

@@ -1,8 +1,27 @@
-from fastapi import APIRouter
+from datetime import date
 
-from database import get_db_connection
+import psycopg
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from database import db_error_message, get_db_connection
 
 router = APIRouter(prefix="/api/analytics", tags=["Analytics"])
+
+
+class EodRequest(BaseModel):
+    run_date: date
+
+
+@router.post("/eod")
+def run_end_of_day(body: EodRequest):
+    """Runs end_of_day(run_date): coupons, bond redemption, and option expiry settlement."""
+    try:
+        with get_db_connection() as conn:
+            conn.execute("CALL end_of_day(%s::DATE)", (body.run_date,))
+        return {"status": "ok", "run_date": body.run_date.isoformat()}
+    except psycopg.Error as e:
+        raise HTTPException(status_code=400, detail=db_error_message(e))
 
 
 @router.get("/integrity")
@@ -50,7 +69,7 @@ def drawdown():
                 SELECT instrument_id, trade_date, close,
                        LAG(close, 30) OVER w AS close_30_ago,
                        MAX(close) OVER (PARTITION BY instrument_id ORDER BY trade_date
-                                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_peak
+                                       ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_peak
                   FROM PRICE_BAR WINDOW w AS (PARTITION BY instrument_id ORDER BY trade_date)
             )
             SELECT i.symbol,

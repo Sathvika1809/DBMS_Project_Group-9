@@ -11,9 +11,16 @@ def list_instruments():
     with get_db_connection() as conn:
         return conn.execute(
             """
-            SELECT i.instrument_id, i.symbol, i.name, i.instrument_type, i.status,
-                   i.multiplier, i.tick_size, i.lot_size, lp.last_price
-              FROM INSTRUMENT i JOIN last_price_view lp USING (instrument_id)
+            SELECT i.instrument_id, i.symbol, i.name, i.instrument_type, i.sector, i.status,
+                   i.multiplier, i.tick_size, i.lot_size, lp.last_price,
+                   b.face_value, b.coupon_rate, b.coupon_frequency, b.issue_date, b.maturity_date,
+                   approx_ytm(lp.last_price, b.coupon_rate, b.maturity_date, CURRENT_DATE) AS approx_ytm,
+                   o.strike, o.expiry, o.option_type, u.symbol AS underlying_symbol
+              FROM INSTRUMENT i
+              JOIN last_price_view lp USING (instrument_id)
+              LEFT JOIN BOND b   ON b.instrument_id = i.instrument_id
+              LEFT JOIN OPTION o ON o.instrument_id = i.instrument_id
+              LEFT JOIN INSTRUMENT u ON u.instrument_id = o.underlying_id
              ORDER BY i.instrument_id
             """
         ).fetchall()

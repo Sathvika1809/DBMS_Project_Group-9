@@ -1,23 +1,14 @@
 -- ============================================================================
--- db/04_procedures.sql : the matching engine and end-of-day processing
+-- db/04_procedures.sql : the matching engine, order modification, and EOD
 --
---   match_and_settle(order_id)         SAFE: advisory book lock + FOR UPDATE
---   match_and_settle_unsafe(order_id)  same logic, NO locks (concurrency demo only)
+--   match_and_settle(order_id)               SAFE: advisory book lock + FOR UPDATE
+--   match_and_settle_unsafe(order_id)        same logic, NO locks (concurrency demo only)
 --   cancel_order(order_id, account_id)
---   end_of_day(date)                   coupons, bond redemption, option expiry
---   approx_ytm(...)                    bond yield-to-maturity approximation
---
--- Everything runs inside the caller's transaction: if any statement fails, the
--- order insert, trades, fills, ledger rows, positions and balances all roll back.
+--   modify_order(order_id, account_id, new_price, new_qty)
+--   end_of_day(date)                         coupons, bond redemption, option expiry
+--   approx_ytm(...)                          bond yield-to-maturity approximation
 -- ============================================================================
 
--- ---------------------------------------------------------------------------
--- One side of a settlement: apply a cash delta and a quantity delta to one account.
--- Deliberately a read-modify-write. In SAFE mode the caller already holds
--- FOR UPDATE locks on the ACCOUNT and POSITION rows, so the read cannot be
--- stale. In UNSAFE mode there are no locks and pg_sleep widens the race window,
--- which produces lost updates (cash and shares silently appear or vanish).
--- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION _settle_leg(
     p_account    INT,
     p_instrument INT,
@@ -46,7 +37,7 @@ BEGIN
     END IF;
 
     v_new_qty := v_qty + p_qty_delta;
-    IF p_qty_delta > 0 THEN   -- buying: weighted-average cost
+    IF p_qty_delta > 0 THEN
         v_new_avg := ROUND((v_qty * v_avg + p_qty_delta * p_price) / v_new_qty, 2);
     ELSE
         v_new_avg := v_avg;
@@ -60,10 +51,6 @@ BEGIN
     DO UPDATE SET quantity = EXCLUDED.quantity, average_buy_price = EXCLUDED.average_buy_price;
 END $$;
 
--- ---------------------------------------------------------------------------
--- Core matching loop (price-time priority, trades execute at the resting
--- order's price).
--- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION _match_core(p_order_id INT, p_safe BOOLEAN)
 RETURNS VOID LANGUAGE plpgsql AS $$
 DECLARE
@@ -88,11 +75,8 @@ BEGIN
     END IF;
 
     IF p_safe THEN
-        -- One matcher per book at a time (the way real exchanges run one engine
-        -- per symbol). Released automatically at COMMIT/ROLLBACK.
         PERFORM pg_advisory_xact_lock(1, v_ord.instrument_id);
         SELECT * INTO v_ord FROM "ORDER" WHERE order_id = p_order_id FOR UPDATE;
-        -- Serialize everything this account does with its cash and holdings.
         PERFORM 1 FROM ACCOUNT WHERE account_id = v_ord.account_id FOR UPDATE;
     END IF;
 
@@ -103,7 +87,7 @@ BEGIN
     SELECT multiplier INTO v_mult FROM INSTRUMENT WHERE instrument_id = v_ord.instrument_id;
     v_remaining := v_ord.qty - v_ord.filled_qty;
 
-    -- ---- buying power / holdings check (net of the account's other open orders)
+    -- Buying power / holdings check (net of the account's other open orders)
     IF v_ord.side = 'BUY' THEN
         SELECT cash_balance INTO v_cash FROM ACCOUNT WHERE account_id = v_ord.account_id;
         SELECT COALESCE(SUM((o.qty - o.filled_qty) * o.price * i.multiplier), 0) INTO v_reserved
@@ -130,7 +114,7 @@ BEGIN
         END IF;
     END IF;
 
-    -- ---- matching loop
+    -- Matching loop
     LOOP
         EXIT WHEN v_remaining <= 0;
 
@@ -138,7 +122,7 @@ BEGIN
             SELECT * INTO v_rest FROM "ORDER"
              WHERE instrument_id = v_ord.instrument_id AND side = 'SELL'
                AND status IN ('OPEN', 'PARTIAL') AND price <= v_ord.price
-               AND account_id <> v_ord.account_id          -- no self-trades
+               AND account_id <> v_ord.account_id
              ORDER BY price ASC, created_at ASC, order_id ASC
              LIMIT 1;
         ELSE
@@ -163,7 +147,6 @@ BEGIN
         END IF;
 
         IF p_safe THEN
-            -- Lock both counterparties in account_id order to avoid deadlocks.
             PERFORM 1 FROM ACCOUNT
              WHERE account_id IN (v_buyer, v_seller) ORDER BY account_id FOR UPDATE;
             PERFORM 1 FROM POSITION
@@ -177,8 +160,6 @@ BEGIN
         VALUES (v_buy_order, v_sell_order, v_rest.price, v_fill)
         RETURNING trade_id INTO v_trade_id;
 
-        -- One fill per side. The AFTER INSERT trigger on ORDER_FILL updates
-        -- ORDER.filled_qty and ORDER.status.
         INSERT INTO ORDER_FILL (order_id, fill_seq, trade_id, qty, price)
         SELECT o,
                COALESCE((SELECT MAX(f.fill_seq) FROM ORDER_FILL f WHERE f.order_id = o), 0) + 1,
@@ -202,7 +183,6 @@ BEGIN
     PERFORM _match_core(p_order_id, TRUE);
 END $$;
 
--- Same logic with locking switched off. For the concurrency demo ONLY.
 CREATE OR REPLACE PROCEDURE match_and_settle_unsafe(p_order_id INT)
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -233,8 +213,68 @@ BEGIN
 END $$;
 
 -- ---------------------------------------------------------------------------
--- Bond yield-to-maturity approximation: (C + (100 - P) / years) / ((100 + P) / 2)
--- P = clean price per 100 face, C = annual coupon per 100. Returns a fraction.
+-- Modify price/qty of a resting order (Cancel/Replace semantics):
+--   - Decreasing qty at the same price preserves time priority (created_at).
+--   - Changing price or increasing qty resets time priority and re-runs match.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE modify_order(
+    p_order_id   INT,
+    p_account_id INT,
+    p_new_price  NUMERIC,
+    p_new_qty    NUMERIC
+)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_ord  "ORDER"%ROWTYPE;
+    v_inst INSTRUMENT%ROWTYPE;
+    v_loses_priority BOOLEAN;
+BEGIN
+    SELECT * INTO v_ord FROM "ORDER" WHERE order_id = p_order_id AND account_id = p_account_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Order % not found for account %', p_order_id, p_account_id;
+    END IF;
+
+    PERFORM pg_advisory_xact_lock(1, v_ord.instrument_id);
+    SELECT * INTO v_ord FROM "ORDER" WHERE order_id = p_order_id FOR UPDATE;
+
+    IF v_ord.status NOT IN ('OPEN', 'PARTIAL') THEN
+        RAISE EXCEPTION 'Order % is % and cannot be modified', p_order_id, v_ord.status;
+    END IF;
+
+    IF p_new_qty < v_ord.filled_qty OR p_new_qty <= 0 THEN
+        RAISE EXCEPTION 'New quantity % cannot be less than already filled quantity %', p_new_qty, v_ord.filled_qty
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    SELECT * INTO v_inst FROM INSTRUMENT WHERE instrument_id = v_ord.instrument_id;
+    IF MOD(p_new_price, v_inst.tick_size) <> 0 THEN
+        RAISE EXCEPTION 'Price % is not a multiple of tick size %', p_new_price, v_inst.tick_size
+            USING ERRCODE = 'check_violation';
+    END IF;
+    IF MOD(p_new_qty, v_inst.lot_size) <> 0 THEN
+        RAISE EXCEPTION 'Quantity % is not a multiple of lot size %', p_new_qty, v_inst.lot_size
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    v_loses_priority := (p_new_price <> v_ord.price) OR (p_new_qty > v_ord.qty);
+
+    UPDATE "ORDER"
+       SET price      = p_new_price,
+           qty        = p_new_qty,
+           status     = CASE WHEN filled_qty = p_new_qty THEN 'FILLED'
+                             WHEN filled_qty > 0 THEN 'PARTIAL'
+                             ELSE 'OPEN' END,
+           created_at = CASE WHEN v_loses_priority THEN CURRENT_TIMESTAMP ELSE created_at END
+     WHERE order_id = p_order_id;
+
+    -- Re-check buying power / holdings and match if the new limit crosses the book
+    IF p_new_qty > v_ord.filled_qty THEN
+        PERFORM _match_core(p_order_id, TRUE);
+    END IF;
+END $$;
+
+-- ---------------------------------------------------------------------------
+-- Bond yield-to-maturity approximation
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION approx_ytm(p_price NUMERIC, p_coupon_rate NUMERIC, p_maturity DATE, p_on DATE)
 RETURNS NUMERIC LANGUAGE sql IMMUTABLE AS $$
@@ -244,15 +284,7 @@ RETURNS NUMERIC LANGUAGE sql IMMUTABLE AS $$
 $$;
 
 -- ---------------------------------------------------------------------------
--- End-of-day processing for p_date:
---   1. pay coupons to bond holders on coupon dates (idempotent through the
---      UNIQUE constraint on CASH_LEDGER)
---   2. redeem matured bonds at face value
---   3. cash-settle expired options at intrinsic value, paid by the HOUSE account
---   Expired instruments get status EXPIRED and their open orders are cancelled.
--- Coupons and redemptions are issuer payments, so total cash in the system grows
--- by exactly the amounts in the COUPON/REDEMPTION ledger rows. Option payouts are
--- zero-sum (HOUSE pays the holders).
+-- End-of-day processing for p_date
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE PROCEDURE end_of_day(p_date DATE DEFAULT CURRENT_DATE)
 LANGUAGE plpgsql AS $$
@@ -268,7 +300,7 @@ BEGIN
         RAISE EXCEPTION 'No HOUSE account exists';
     END IF;
 
-    -- 1. coupons
+    -- 1. Coupons
     FOR r IN
         SELECT b.instrument_id, b.face_value * b.coupon_rate / b.coupon_frequency AS per_unit
           FROM BOND b JOIN INSTRUMENT i ON i.instrument_id = b.instrument_id
@@ -291,7 +323,7 @@ BEGIN
           FROM paid WHERE a.account_id = paid.account_id;
     END LOOP;
 
-    -- 2. bond redemption
+    -- 2. Bond redemption
     FOR r IN
         SELECT b.instrument_id, b.face_value
           FROM BOND b JOIN INSTRUMENT i ON i.instrument_id = b.instrument_id
@@ -314,7 +346,7 @@ BEGIN
         UPDATE INSTRUMENT SET status = 'EXPIRED' WHERE instrument_id = r.instrument_id;
     END LOOP;
 
-    -- 3. option expiry (cash-settled, European)
+    -- 3. Option expiry (cash-settled, European)
     FOR r IN
         SELECT o.instrument_id, o.underlying_id, o.strike, o.option_type, i.multiplier
           FROM OPTION o JOIN INSTRUMENT i ON i.instrument_id = o.instrument_id

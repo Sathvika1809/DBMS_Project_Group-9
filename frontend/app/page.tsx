@@ -104,7 +104,9 @@ export default function Trade() {
           {portfolio && (
             <div className="margin-pill">
               <span className="muted">AVAILABLE FUNDS</span>
-              <strong className="buy">₹{money(portfolio.cash)}</strong>
+              <strong className="buy">
+                ₹{money(portfolio.cash_balance ?? portfolio.cash ?? portfolio.available_cash ?? 0)}
+              </strong>
             </div>
           )}
           <div className="acct-select-wrap">

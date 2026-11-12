@@ -21,6 +21,9 @@ pool = ConnectionPool(
     conninfo=CONN_STRING,
     min_size=1,
     max_size=int(os.getenv("DB_POOL_MAX", "20")),
+    max_idle=60,
+    max_lifetime=300,
+    check=ConnectionPool.check_connection,
     kwargs={"row_factory": dict_row},
     open=False,
 )

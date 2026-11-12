@@ -24,6 +24,20 @@ export default function Trade() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [rightTab, setRightTab] = useState<RightTab>("portfolio");
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
+
+  useEffect(() => {
+    const saved = (localStorage.getItem("kite-theme") as "dark" | "light") || "dark";
+    setTheme(saved);
+    document.documentElement.dataset.theme = saved;
+  }, []);
+
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem("kite-theme", next);
+  };
 
   useEffect(() => {
     Promise.all([api("/accounts"), api("/instruments")])
@@ -123,6 +137,14 @@ export default function Trade() {
               ))}
             </select>
           </div>
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={toggleTheme}
+            title="Switch color theme"
+          >
+            {theme === "dark" ? "☀ Light" : "☾ Dark"}
+          </button>
         </div>
       </div>
 

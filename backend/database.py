@@ -10,7 +10,10 @@ DB_NAME = os.getenv("DB_NAME", "papertrading")
 DB_USER = os.getenv("DB_USER", "postgres")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "postgrespassword")
 
-CONN_STRING = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+CONN_STRING = os.getenv(
+    "DATABASE_URL",
+    f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}",
+)
 
 # Rows come back as dicts. Leaving the `with pool.connection()` block commits;
 # an exception inside it rolls back, which is what makes settlement atomic.

@@ -1,6 +1,11 @@
 -- ============================================================================
--- CS F212 Database Systems — Project Schema Definition (all 12 relations)
--- File: db/01_schema.sql
+-- CS F212 Database Systems: Paper-Trading Exchange (Group 9)
+-- File: db/01_schema.sql  (all 12 relations)
+--
+-- Changes vs. the mid-sem version:
+--   * ORDER: status and filled_qty must agree (OPEN=0, PARTIAL=between, FILLED=qty)
+--   * ORDER_FILL: UNIQUE (trade_id, order_id): a trade has one fill per side
+--   * PRICE_BAR: full OHLC consistency CHECK
 -- ============================================================================
 
 DROP TABLE IF EXISTS AUDIT_LOG CASCADE;
@@ -79,15 +84,15 @@ CREATE TABLE PRICE_BAR (
     close DECIMAL(12, 2) NOT NULL CHECK (close > 0),
     volume BIGINT NOT NULL CHECK (volume >= 0),
     PRIMARY KEY (instrument_id, trade_date),
-    CHECK (high >= low)
+    CHECK (high >= low AND high >= open AND high >= close AND low <= open AND low <= close)
 );
 
--- 7. POSITION (M:N HOLDS; PK = both FKs, as in the report)
+-- 7. POSITION (M:N HOLDS; report: Qty, Avg_cost)
 CREATE TABLE POSITION (
     account_id INT NOT NULL REFERENCES ACCOUNT(account_id) ON DELETE CASCADE,
     instrument_id INT NOT NULL REFERENCES INSTRUMENT(instrument_id) ON DELETE CASCADE,
-    quantity DECIMAL(15, 4) NOT NULL CHECK (quantity >= 0),          -- report: Qty
-    average_buy_price DECIMAL(12, 2) NOT NULL CHECK (average_buy_price >= 0),  -- report: Avg_cost
+    quantity DECIMAL(15, 4) NOT NULL CHECK (quantity >= 0),
+    average_buy_price DECIMAL(12, 2) NOT NULL CHECK (average_buy_price >= 0),
     PRIMARY KEY (account_id, instrument_id)
 );
 
@@ -103,7 +108,14 @@ CREATE TABLE "ORDER" (
     status VARCHAR(20) NOT NULL DEFAULT 'OPEN'
         CHECK (status IN ('OPEN', 'PARTIAL', 'FILLED', 'CANCELLED')),
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (filled_qty >= 0 AND filled_qty <= qty)
+    CHECK (filled_qty >= 0 AND filled_qty <= qty),
+    -- status and filled_qty can never disagree
+    CHECK (
+        (status = 'OPEN'    AND filled_qty = 0) OR
+        (status = 'PARTIAL' AND filled_qty > 0 AND filled_qty < qty) OR
+        (status = 'FILLED'  AND filled_qty = qty) OR
+        (status = 'CANCELLED')
+    )
 );
 
 -- 9. TRADE (BUY_SIDE / SELL_SIDE both reference ORDER)
@@ -125,7 +137,8 @@ CREATE TABLE ORDER_FILL (
     qty DECIMAL(12, 4) NOT NULL CHECK (qty > 0),
     price DECIMAL(12, 2) NOT NULL CHECK (price > 0),
     filled_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (order_id, fill_seq)
+    PRIMARY KEY (order_id, fill_seq),
+    UNIQUE (trade_id, order_id)
 );
 
 -- 11. CASH_LEDGER

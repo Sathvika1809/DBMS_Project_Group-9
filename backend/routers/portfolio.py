@@ -1,58 +1,59 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException
+
 from database import get_db_connection
 
-router = APIRouter(prefix="/api/portfolio", tags=["Portfolio"])
+router = APIRouter(prefix="/api/accounts", tags=["Accounts"])
 
 
-@router.get("/{account_id}")
-def get_user_portfolio(account_id: int):
-    """Account cash balance, positions, and unrealized P&L (via portfolio_view)."""
-    try:
-        with get_db_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT account_id, user_id, cash_balance, account_type "
-                    "FROM ACCOUNT WHERE account_id = %s;",
-                    (account_id,),
-                )
-                account_row = cur.fetchone()
-                if not account_row:
-                    raise HTTPException(status_code=404, detail="Account not found.")
+@router.get("")
+@router.get("/", include_in_schema=False)
+def list_accounts():
+    with get_db_connection() as conn:
+        return conn.execute(
+            """
+            SELECT a.account_id, u.name, a.account_type, a.cash_balance
+              FROM ACCOUNT a JOIN "USER" u ON u.user_id = a.user_id
+             ORDER BY a.account_id
+            """
+        ).fetchall()
 
-                cur.execute(
-                    """
-                    SELECT symbol, instrument_type, quantity, avg_buy_price,
-                           current_price, unrealized_pnl
-                    FROM portfolio_view
-                    WHERE account_id = %s;
-                    """,
-                    (account_id,),
-                )
-                holdings = [
-                    {
-                        "symbol": r[0],
-                        "instrument_type": r[1],
-                        "quantity": float(r[2]),
-                        "avg_buy_price": float(r[3]),
-                        "current_price": float(r[4]),
-                        "unrealized_pnl": float(r[5]),
-                    }
-                    for r in cur.fetchall()
-                ]
 
-                return {
-                    "account_id": account_row[0],
-                    "user_id": account_row[1],
-                    "cash_balance": float(account_row[2]),
-                    "account_type": account_row[3],
-                    "is_house": account_row[3] == "HOUSE",
-                    "holdings": holdings,
-                }
+@router.get("/{account_id}/portfolio")
+def get_portfolio(account_id: int):
+    """Cash, positions and unrealized P&L (reads portfolio_view)."""
+    with get_db_connection() as conn:
+        account = conn.execute(
+            "SELECT account_id, user_id, cash_balance, account_type FROM ACCOUNT WHERE account_id = %s",
+            (account_id,),
+        ).fetchone()
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found.")
+        holdings = conn.execute(
+            """
+            SELECT instrument_id, symbol, instrument_type, quantity, avg_buy_price,
+                   current_price, market_value, unrealized_pnl
+              FROM portfolio_view WHERE account_id = %s ORDER BY symbol
+            """,
+            (account_id,),
+        ).fetchall()
+    market_value = sum(h["market_value"] for h in holdings)
+    return {
+        **account,
+        "is_house": account["account_type"] == "HOUSE",
+        "holdings": holdings,
+        "market_value": market_value,
+        "total_equity": account["cash_balance"] + market_value,
+        "unrealized_pnl": sum(h["unrealized_pnl"] for h in holdings),
+    }
 
-    except HTTPException:
-        raise  # keep the 404 instead of turning it into a 500
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch portfolio: {str(e)}",
-        )
+
+@router.get("/{account_id}/ledger")
+def get_ledger(account_id: int, limit: int = 50):
+    with get_db_connection() as conn:
+        return conn.execute(
+            """
+            SELECT ledger_id, entry_type, amount, trade_id, instrument_id, value_date, created_at
+              FROM CASH_LEDGER WHERE account_id = %s ORDER BY ledger_id DESC LIMIT %s
+            """,
+            (account_id, limit),
+        ).fetchall()

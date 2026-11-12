@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 venv/
 env/
+.next/
 
 # Secrets / local config
 .env
@@ -18,3 +19,11 @@ Thumbs.db
 # Docker / DB local data
 pgdata/
 *.log
+node_modules/
+frontend/node_modules/
+.env
+__pycache__/
+.venv/
+
+.next/
+frontend/.next/

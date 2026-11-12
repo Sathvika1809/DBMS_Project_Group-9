@@ -1,41 +1,50 @@
+import os
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
-from database import pool, get_db_connection
-from routers import orders, portfolio
+from fastapi.middleware.cors import CORSMiddleware
+
+from database import db_error_message, get_db_connection, pool
+from routers import analytics, market_data, orders, portfolio
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     pool.open()
-    print("Database connection pool established.")
     yield
     pool.close()
-    print("Database connection pool closed.")
+
 
 app = FastAPI(
     title="Paper-Trading Exchange API",
-    description="CS F212 Database Systems — Backend API",
-    version="1.0.0",
-    lifespan=lifespan
+    description="CS F212 Database Systems: thin API over PostgreSQL. The matching engine lives in the database.",
+    version="1.1.0",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000").split(","),
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(orders.router)
 app.include_router(portfolio.router)
+app.include_router(market_data.router)
+app.include_router(analytics.router)
+
 
 @app.get("/")
 def read_root():
     return {"message": "Paper-Trading Exchange Backend API is running."}
 
+
 @app.get("/health")
 def db_health_check():
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM INSTRUMENT;")
-                count = cur.fetchone()[0]
-                return {
-                    "status": "healthy",
-                    "database": "connected",
-                    "total_instruments": count
-                }
+            row = conn.execute("SELECT COUNT(*) AS n FROM INSTRUMENT").fetchone()
+        return {"status": "healthy", "database": "connected", "total_instruments": row["n"]}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database connection failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database connection failed: {db_error_message(e)}")

@@ -18,9 +18,8 @@ services:
       - ./db/05_seed_data.sql:/docker-entrypoint-initdb.d/05_seed_data.sql
       - ./data_pipeline/seed_csvs:/data_pipeline/seed_csvs:ro
     healthcheck:
-      # -h localhost forces a TCP check. During first-time init Postgres runs a
-      # temporary server on the Unix socket only, so a socket check can pass
-      # before the seed has finished and the backend would start too early.
+      # -h localhost forces a TCP check: during first-time init Postgres runs a
+      # temporary socket-only server, so a socket check could pass too early.
       test: ["CMD-SHELL", "pg_isready -h localhost -U postgres -d papertrading"]
       interval: 5s
       timeout: 5s
@@ -38,6 +37,18 @@ services:
       DB_NAME: papertrading
       DB_USER: postgres
       DB_PASSWORD: postgrespassword
+      CORS_ORIGINS: http://localhost:3000
     depends_on:
       postgres_db:
         condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        BACKEND_URL: http://backend:8000
+    container_name: paper_trading_frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend

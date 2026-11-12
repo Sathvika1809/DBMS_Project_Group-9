@@ -1,57 +1,86 @@
+from decimal import Decimal
+from typing import Literal
+
+import psycopg
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
-from database import get_db_connection
+
+from database import db_error_message, get_db_connection
 
 router = APIRouter(prefix="/api/orders", tags=["Orders"])
 
 
 class OrderCreateRequest(BaseModel):
-    account_id: int = Field(..., description="ID of the trading account placing the order")
-    instrument_id: int = Field(..., description="ID of the stock/bond/option instrument")
-    side: str = Field(..., pattern="^(BUY|SELL)$", description="Order side: BUY or SELL")
-    price: float = Field(..., gt=0, description="Limit price (must be positive)")
-    qty: float = Field(..., gt=0, description="Order quantity (must be positive)")
+    account_id: int
+    instrument_id: int
+    side: Literal["BUY", "SELL"]
+    price: Decimal = Field(..., gt=0, max_digits=12, decimal_places=2, description="Limit price")
+    qty: Decimal = Field(..., gt=0, max_digits=12, decimal_places=4)
+
+
+class CancelRequest(BaseModel):
+    account_id: int
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_201_CREATED, include_in_schema=False)
 def place_and_match_order(order: OrderCreateRequest, unsafe: bool = False):
     """
-    Submits a LIMIT order and calls the match_and_settle stored procedure.
-    ?unsafe=true calls match_and_settle_unsafe (no row locks) for the
-    concurrency demo only.
+    Insert a LIMIT order and call the match_and_settle stored procedure in ONE
+    transaction. If validation, matching or settlement fails, everything rolls
+    back, including the order itself.
+    ?unsafe=true calls match_and_settle_unsafe (no locks): concurrency demo only.
     """
-    # Fixed whitelist: never build the procedure name from user input.
-    proc = "match_and_settle_unsafe" if unsafe else "match_and_settle"
+    proc = "match_and_settle_unsafe" if unsafe else "match_and_settle"  # fixed whitelist
     try:
         with get_db_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO "ORDER" (account_id, instrument_id, side, price, qty, filled_qty, status)
-                    VALUES (%s, %s, %s, %s, %s, 0, 'OPEN')
-                    RETURNING order_id;
-                    """,
-                    (order.account_id, order.instrument_id, order.side, order.price, order.qty),
-                )
-                order_id = int(cur.fetchone()[0])
-
-                cur.execute(f"CALL {proc}(%s::INT);", (order_id,))
-
-                cur.execute('SELECT status, filled_qty FROM "ORDER" WHERE order_id = %s;', (order_id,))
-                status_, filled = cur.fetchone()
-            # leaving the connection context commits; any exception rolls back
-            # the INSERT and the whole settlement together.
-
+            row = conn.execute(
+                """
+                INSERT INTO "ORDER" (account_id, instrument_id, side, price, qty)
+                VALUES (%s, %s, %s, %s, %s) RETURNING order_id
+                """,
+                (order.account_id, order.instrument_id, order.side, order.price, order.qty),
+            ).fetchone()
+            order_id = row["order_id"]
+            conn.execute(f"CALL {proc}(%s::INT)", (order_id,))
+            result = conn.execute(
+                'SELECT status, filled_qty FROM "ORDER" WHERE order_id = %s', (order_id,)
+            ).fetchone()
+            fills = conn.execute(
+                "SELECT fill_seq, qty, price FROM ORDER_FILL WHERE order_id = %s ORDER BY fill_seq",
+                (order_id,),
+            ).fetchall()
         return {
-            "message": "Order placed and processed successfully.",
             "order_id": order_id,
-            "status": status_,
-            "filled_qty": float(filled),
+            "status": result["status"],
+            "filled_qty": result["filled_qty"],
+            "fills": fills,
             "mode": "unsafe" if unsafe else "safe",
         }
+    except psycopg.Error as e:
+        raise HTTPException(status_code=400, detail=db_error_message(e))
 
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Order processing failed: {str(e)}",
-        )
+
+@router.get("/")
+@router.get("", include_in_schema=False)
+def list_orders(account_id: int, limit: int = 50):
+    with get_db_connection() as conn:
+        return conn.execute(
+            """
+            SELECT o.order_id, i.symbol, o.side, o.price, o.qty, o.filled_qty, o.status, o.created_at
+              FROM "ORDER" o JOIN INSTRUMENT i ON i.instrument_id = o.instrument_id
+             WHERE o.account_id = %s
+             ORDER BY o.order_id DESC LIMIT %s
+            """,
+            (account_id, limit),
+        ).fetchall()
+
+
+@router.post("/{order_id}/cancel")
+def cancel_order(order_id: int, body: CancelRequest):
+    try:
+        with get_db_connection() as conn:
+            conn.execute("CALL cancel_order(%s::INT, %s::INT)", (order_id, body.account_id))
+        return {"order_id": order_id, "status": "CANCELLED"}
+    except psycopg.Error as e:
+        raise HTTPException(status_code=400, detail=db_error_message(e))
